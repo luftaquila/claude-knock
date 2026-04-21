@@ -1,0 +1,72 @@
+# claude-knock MQTT Server
+#
+# Basic usage:
+#   docker compose up -d
+#   podman compose up -d
+#
+# With bundled Traefik:
+#   docker compose --profile traefik up -d
+#
+# With external Traefik:
+#   MQTT_DOMAIN=mqtt.example.com TRAEFIK_NETWORK=traefik docker compose --profile external-traefik up -d
+#
+# Password setup (run before first start):
+#   docker compose run --rm mosquitto mosquitto_passwd -b /mosquitto/config/password.txt claude-knock-hook <password>
+#   docker compose run --rm mosquitto mosquitto_passwd -b /mosquitto/config/password.txt claude-knock-<mac6> <password>
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: claude-knock-mqtt
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+      - "${WS_PORT:-9001}:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./mosquitto/password.txt:/mosquitto/config/password.txt
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+
+  # Profile: bundled Traefik (use --profile traefik)
+  traefik:
+    image: traefik:v3
+    profiles: ["traefik"]
+    container_name: claude-knock-traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8883:8883"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - traefik-certs:/letsencrypt
+
+  # Profile: connect to external Traefik network (use --profile external-traefik)
+  mosquitto-traefik:
+    extends:
+      service: mosquitto
+    profiles: ["external-traefik"]
+    container_name: claude-knock-mqtt-traefik
+    ports: []  # Traefik handles routing
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.routers.mqtt.rule=HostSNI(`${MQTT_DOMAIN:-mqtt.example.com}`)"
+      - "traefik.tcp.routers.mqtt.entrypoints=mqtts"
+      - "traefik.tcp.routers.mqtt.tls.certresolver=letsencrypt"
+      - "traefik.tcp.services.mqtt.loadbalancer.server.port=1883"
+    networks:
+      - default
+      - traefik
+
+volumes:
+  mosquitto-data:
+  mosquitto-log:
+  traefik-certs:
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}

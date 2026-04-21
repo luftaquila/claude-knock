@@ -11,16 +11,18 @@ permissions:
 jobs:
   build-firmware:
     uses: ./.github/workflows/firmware.yml
+  build-stl:
+    uses: ./.github/workflows/stl.yml
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [build-firmware]
+    needs: [build-firmware, build-stl]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
       - run: |
           mv scripts/flash.* .
-          zip -r claude-knock-${{ github.ref_name }}.zip firmware flash.*
+          zip -r claude-knock-${{ github.ref_name }}.zip firmware flash.* stl
       - uses: ncipollo/release-action@v1
         with:
           allowUpdates: true

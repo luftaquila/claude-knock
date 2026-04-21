@@ -1,0 +1,32 @@
+name: STL Build
+
+on:
+  push:
+    paths:
+      - 'device/3d/housing.scad'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build STLs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: sudo snap install openscad-nightly
+
+      - run: |
+          mkdir -p release
+          for part in base lid pillar; do
+            openscad-nightly -o release/$part.stl -D "part=\"$part\"" device/3d/housing.scad
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stl
+          path: release

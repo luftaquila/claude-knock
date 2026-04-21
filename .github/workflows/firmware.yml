@@ -1,0 +1,38 @@
+name: ESP-IDF Firmware Build
+
+on:
+  push:
+    paths:
+      - 'device/firmware/**'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0
+          target: esp32c3
+          path: 'device/firmware'
+          command: idf.py build
+
+      - run: |
+          mkdir -p release/bootloader
+          cp device/firmware/build/flash_args release
+          cp device/firmware/build/claude-knock.* release
+          cp device/firmware/build/bootloader/bootloader.* release/bootloader
+          cp -r device/firmware/build/partition_table release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware
+          path: release

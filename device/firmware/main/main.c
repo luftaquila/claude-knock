@@ -83,5 +83,6 @@ void app_main(void)
         }
 
         mqtt_start(&cfg);
+        portal_start();
     }
 }

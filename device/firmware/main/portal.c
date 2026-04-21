@@ -25,13 +25,70 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* JSON-escape into dst; on overflow returns ESP_FAIL */
+static esp_err_t json_escape(const char *src, char *dst, size_t dst_len)
+{
+    size_t di = 0;
+    for (const char *p = src; *p; p++) {
+        const char *esc = NULL;
+        char buf[8];
+        switch (*p) {
+        case '"':  esc = "\\\""; break;
+        case '\\': esc = "\\\\"; break;
+        case '\n': esc = "\\n"; break;
+        case '\r': esc = "\\r"; break;
+        case '\t': esc = "\\t"; break;
+        default:
+            if ((unsigned char)*p < 0x20) {
+                snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)*p);
+                esc = buf;
+            }
+            break;
+        }
+        if (esc) {
+            size_t l = strlen(esc);
+            if (di + l >= dst_len) return ESP_FAIL;
+            memcpy(dst + di, esc, l);
+            di += l;
+        } else {
+            if (di + 1 >= dst_len) return ESP_FAIL;
+            dst[di++] = *p;
+        }
+    }
+    dst[di] = '\0';
+    return ESP_OK;
+}
+
 static esp_err_t status_get_handler(httpd_req_t *req)
 {
-    char username[26];
-    config_generate_username(username, sizeof(username));
+    device_config_t cfg;
+    esp_err_t err = config_load(&cfg);
+    if (err != ESP_OK) {
+        memset(&cfg, 0, sizeof(cfg));
+        config_generate_username(cfg.mqtt_username, sizeof(cfg.mqtt_username));
+    }
 
-    char json[64];
-    snprintf(json, sizeof(json), "{\"username\":\"%s\"}", username);
+    char ssid_esc[sizeof(cfg.wifi_ssid) * 2];
+    char server_esc[sizeof(cfg.mqtt_server) * 2];
+    char channel_esc[sizeof(cfg.mqtt_channel) * 2];
+    ssid_esc[0] = server_esc[0] = channel_esc[0] = '\0';
+
+    if (cfg.configured) {
+        if (json_escape(cfg.wifi_ssid, ssid_esc, sizeof(ssid_esc)) != ESP_OK ||
+            json_escape(cfg.mqtt_server, server_esc, sizeof(server_esc)) != ESP_OK ||
+            json_escape(cfg.mqtt_channel, channel_esc, sizeof(channel_esc)) != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON escape overflow");
+            return ESP_FAIL;
+        }
+    }
+
+    char json[1024];
+    snprintf(json, sizeof(json),
+             "{\"username\":\"%s\",\"configured\":%s,"
+             "\"wifi_ssid\":\"%s\",\"mqtt_server\":\"%s\",\"mqtt_channel\":\"%s\"}",
+             cfg.mqtt_username,
+             cfg.configured ? "true" : "false",
+             ssid_esc, server_esc, channel_esc);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
@@ -101,6 +158,9 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     }
     body[received] = '\0';
 
+    device_config_t existing;
+    bool has_existing = (config_load(&existing) == ESP_OK && existing.configured);
+
     device_config_t cfg = {0};
     config_generate_username(cfg.mqtt_username, sizeof(cfg.mqtt_username));
 
@@ -110,7 +170,13 @@ static esp_err_t save_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    get_form_value(body, "wifi_pass", cfg.wifi_password, sizeof(cfg.wifi_password));
+    /* wifi_pass: form value takes precedence; empty means "keep existing" */
+    if (get_form_value(body, "wifi_pass", cfg.wifi_password, sizeof(cfg.wifi_password)) != ESP_OK ||
+        strlen(cfg.wifi_password) == 0) {
+        if (has_existing) {
+            strncpy(cfg.wifi_password, existing.wifi_password, sizeof(cfg.wifi_password) - 1);
+        }
+    }
 
     if (get_form_value(body, "mqtt_server", cfg.mqtt_server, sizeof(cfg.mqtt_server)) != ESP_OK ||
         strlen(cfg.mqtt_server) == 0) {
@@ -123,10 +189,15 @@ static esp_err_t save_post_handler(httpd_req_t *req)
         strncpy(cfg.mqtt_channel, "claude-knock", sizeof(cfg.mqtt_channel) - 1);
     }
 
+    /* mqtt_pass: form value takes precedence; empty means "keep existing" */
     if (get_form_value(body, "mqtt_pass", cfg.mqtt_password, sizeof(cfg.mqtt_password)) != ESP_OK ||
         strlen(cfg.mqtt_password) == 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT password is required");
-        return ESP_FAIL;
+        if (has_existing && strlen(existing.mqtt_password) > 0) {
+            strncpy(cfg.mqtt_password, existing.mqtt_password, sizeof(cfg.mqtt_password) - 1);
+        } else {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT password is required");
+            return ESP_FAIL;
+        }
     }
 
     esp_err_t err = config_save(&cfg);

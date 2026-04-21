@@ -21,6 +21,8 @@ button:disabled{opacity:.5;cursor:default}
 .msg{text-align:center;margin-top:16px;font-size:.9em;display:none}
 .msg.ok{color:#6fcf97;display:block}
 .msg.err{color:#eb5757;display:block}
+.showpw{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:.8em;color:#888;cursor:pointer}
+.showpw input{width:auto;margin:0;cursor:pointer}
 </style>
 </head>
 <body>
@@ -41,12 +43,27 @@ button:disabled{opacity:.5;cursor:default}
 <div class="hint">Auto-generated from device MAC address</div>
 <label for="mqtt_pass">MQTT Password</label>
 <input id="mqtt_pass" name="mqtt_pass" type="password" required maxlength="64" placeholder="MQTT ACL password">
+<label class="showpw"><input type="checkbox" id="showpw"> Show passwords</label>
 <button type="submit">Save & Reboot</button>
 </form>
 <div id="msg" class="msg"></div>
 </div>
 <script>
-fetch("/status").then(r=>r.json()).then(d=>{document.getElementById("mqtt_user").value=d.username}).catch(()=>{document.getElementById("mqtt_user").value="(unavailable)"});
+fetch("/status").then(r=>r.json()).then(d=>{
+document.getElementById("mqtt_user").value=d.username;
+if(d.configured){
+document.getElementById("wifi_ssid").value=d.wifi_ssid||"";
+document.getElementById("mqtt_server").value=d.mqtt_server||"";
+document.getElementById("mqtt_channel").value=d.mqtt_channel||"claude-knock";
+const wp=document.getElementById("wifi_pass");wp.placeholder="Leave blank to keep current";
+const mp=document.getElementById("mqtt_pass");mp.placeholder="Leave blank to keep current";mp.removeAttribute("required");
+}
+}).catch(()=>{document.getElementById("mqtt_user").value="(unavailable)"});
+document.getElementById("showpw").addEventListener("change",e=>{
+const t=e.target.checked?"text":"password";
+document.getElementById("wifi_pass").type=t;
+document.getElementById("mqtt_pass").type=t;
+});
 document.getElementById("f").addEventListener("submit",function(e){
 e.preventDefault();
 const b=this.querySelector("button");

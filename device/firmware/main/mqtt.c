@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "esp_log.h"
+#include "esp_crt_bundle.h"
 #include "mqtt_client.h"
 
 static const char *TAG = "mqtt";
@@ -74,6 +75,7 @@ esp_err_t mqtt_start(const device_config_t *cfg)
 
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = cfg->mqtt_server,
+        .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
         .credentials.username = cfg->mqtt_username,
         .credentials.authentication.password = cfg->mqtt_password,
     };

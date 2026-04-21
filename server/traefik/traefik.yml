@@ -11,8 +11,6 @@ entryPoints:
           scheme: https
   websecure:
     address: ":443"
-  mqtts:
-    address: ":8883"
 
 providers:
   docker:

@@ -97,11 +97,14 @@ function Remove-CkEntries($hookArray) {
 Write-Host "Configure MQTT connection for claude-knock hooks."
 Write-Host
 
-$mqtt_host = Read-Host "MQTT host [localhost]"
-if ([string]::IsNullOrWhiteSpace($mqtt_host)) { $mqtt_host = "localhost" }
+$mqtt_host = Read-Host "MQTT host"
+if ([string]::IsNullOrWhiteSpace($mqtt_host)) {
+    Write-Host "Error: MQTT host is required." -ForegroundColor Red
+    exit 1
+}
 
-$mqtt_port = Read-Host "MQTT port [1883]"
-if ([string]::IsNullOrWhiteSpace($mqtt_port)) { $mqtt_port = "1883" }
+$mqtt_port = Read-Host "MQTT port [443]"
+if ([string]::IsNullOrWhiteSpace($mqtt_port)) { $mqtt_port = "443" }
 
 $mqtt_topic = Read-Host "MQTT topic [claude-knock]"
 if ([string]::IsNullOrWhiteSpace($mqtt_topic)) { $mqtt_topic = "claude-knock" }
@@ -118,6 +121,13 @@ if ([string]::IsNullOrWhiteSpace($mqtt_pass)) {
     exit 1
 }
 
+# Use TLS for any non-1883 port
+if ($mqtt_port -eq "1883") {
+    $tls_desc = "no (plain MQTT)"
+} else {
+    $tls_desc = "yes (--tls-use-os-certs)"
+}
+
 Write-Host
 Write-Host "--- Configuration ---"
 Write-Host "  Host:     $mqtt_host"
@@ -125,6 +135,7 @@ Write-Host "  Port:     $mqtt_port"
 Write-Host "  Topic:    $mqtt_topic"
 Write-Host "  Username: $mqtt_user"
 Write-Host "  Password: ****"
+Write-Host "  TLS:      $tls_desc"
 Write-Host
 
 $confirm = Read-Host "Apply to $SettingsFile? [Y/n]"
@@ -136,14 +147,19 @@ if ($confirm -match '^[Nn]$') {
 # Escape single quotes for safe shell embedding
 function Escape-ShellQuote($s) { $s -replace "'", "'\''"}
 
-# Build mosquitto_pub commands
+# Build mosquitto_pub commands (TLS for any non-1883 port)
 $e_host  = Escape-ShellQuote $mqtt_host
 $e_port  = Escape-ShellQuote $mqtt_port
 $e_topic = Escape-ShellQuote $mqtt_topic
 $e_user  = Escape-ShellQuote $mqtt_user
 $e_pass  = Escape-ShellQuote $mqtt_pass
-$stop_cmd = "mosquitto_pub -h '$e_host' -p '$e_port' -t '$e_topic' -u '$e_user' -P '$e_pass' -m knock:2"
-$notif_cmd = "mosquitto_pub -h '$e_host' -p '$e_port' -t '$e_topic' -u '$e_user' -P '$e_pass' -m knock:3"
+if ($mqtt_port -eq "1883") {
+    $tls_args = ""
+} else {
+    $tls_args = " --tls-use-os-certs"
+}
+$stop_cmd = "mosquitto_pub -h '$e_host' -p '$e_port'$tls_args -t '$e_topic' -u '$e_user' -P '$e_pass' -m knock:2"
+$notif_cmd = "mosquitto_pub -h '$e_host' -p '$e_port'$tls_args -t '$e_topic' -u '$e_user' -P '$e_pass' -m knock:3"
 
 # Ensure hooks property exists
 if (-not $settings.hooks) {

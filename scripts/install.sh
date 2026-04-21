@@ -70,11 +70,14 @@ fi
 echo "Configure MQTT connection for claude-knock hooks."
 echo
 
-read -rp "MQTT host [localhost]: " mqtt_host
-mqtt_host="${mqtt_host:-localhost}"
+read -rp "MQTT host: " mqtt_host
+if [ -z "$mqtt_host" ]; then
+  echo "Error: MQTT host is required."
+  exit 1
+fi
 
-read -rp "MQTT port [1883]: " mqtt_port
-mqtt_port="${mqtt_port:-1883}"
+read -rp "MQTT port [443]: " mqtt_port
+mqtt_port="${mqtt_port:-443}"
 
 read -rp "MQTT topic [claude-knock]: " mqtt_topic
 mqtt_topic="${mqtt_topic:-claude-knock}"
@@ -89,6 +92,13 @@ if [ -z "$mqtt_pass" ]; then
   exit 1
 fi
 
+# Use TLS for any non-1883 port (443/8883/etc.)
+if [ "$mqtt_port" = "1883" ]; then
+  tls_desc="no (plain MQTT)"
+else
+  tls_desc="yes (--capath /etc/ssl/certs)"
+fi
+
 echo
 echo "--- Configuration ---"
 echo "  Host:     $mqtt_host"
@@ -96,6 +106,7 @@ echo "  Port:     $mqtt_port"
 echo "  Topic:    $mqtt_topic"
 echo "  Username: $mqtt_user"
 echo "  Password: ****"
+echo "  TLS:      $tls_desc"
 echo
 
 read -rp "Apply to $SETTINGS_FILE? [Y/n] " confirm
@@ -109,9 +120,15 @@ shell_escape() {
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
 }
 
-# Build mosquitto_pub commands
-stop_cmd="mosquitto_pub -h '$(shell_escape "$mqtt_host")' -p '$(shell_escape "$mqtt_port")' -t '$(shell_escape "$mqtt_topic")' -u '$(shell_escape "$mqtt_user")' -P '$(shell_escape "$mqtt_pass")' -m knock:2"
-notif_cmd="mosquitto_pub -h '$(shell_escape "$mqtt_host")' -p '$(shell_escape "$mqtt_port")' -t '$(shell_escape "$mqtt_topic")' -u '$(shell_escape "$mqtt_user")' -P '$(shell_escape "$mqtt_pass")' -m knock:3"
+# Build mosquitto_pub commands (TLS for any non-1883 port)
+if [ "$mqtt_port" = "1883" ]; then
+  tls_args=""
+else
+  tls_args=" --capath /etc/ssl/certs"
+fi
+
+stop_cmd="mosquitto_pub -h '$(shell_escape "$mqtt_host")' -p '$(shell_escape "$mqtt_port")'${tls_args} -t '$(shell_escape "$mqtt_topic")' -u '$(shell_escape "$mqtt_user")' -P '$(shell_escape "$mqtt_pass")' -m knock:2"
+notif_cmd="mosquitto_pub -h '$(shell_escape "$mqtt_host")' -p '$(shell_escape "$mqtt_port")'${tls_args} -t '$(shell_escape "$mqtt_topic")' -u '$(shell_escape "$mqtt_user")' -P '$(shell_escape "$mqtt_pass")' -m knock:3"
 
 # Remove existing claude-knock entries, then append new ones
 jq --arg stop_cmd "$stop_cmd" --arg notif_cmd "$notif_cmd" '

@@ -121,6 +121,22 @@ if ([string]::IsNullOrWhiteSpace($mqtt_pass)) {
     exit 1
 }
 
+Write-Host
+Write-Host "Select Notification triggers (Stop hook is always enabled):"
+
+function Ask-Yes($Label, $Default) {
+    $suffix = if ($Default -eq "y") { "[Y/n]" } else { "[y/N]" }
+    $ans = Read-Host "  $Label $suffix"
+    if ([string]::IsNullOrWhiteSpace($ans)) { $ans = $Default }
+    return $ans -match '^[Yy]$'
+}
+
+$notif_matchers = @()
+if (Ask-Yes "permission_prompt (tool approval)"       "y") { $notif_matchers += "permission_prompt" }
+if (Ask-Yes "idle_prompt (60-second inactivity)"      "n") { $notif_matchers += "idle_prompt" }
+if (Ask-Yes "auth_success"                            "y") { $notif_matchers += "auth_success" }
+if (Ask-Yes "elicitation_dialog (MCP input request)"  "y") { $notif_matchers += "elicitation_dialog" }
+
 # Use TLS for any non-1883 port
 if ($mqtt_port -eq "1883") {
     $tls_desc = "no (plain MQTT)"
@@ -128,14 +144,17 @@ if ($mqtt_port -eq "1883") {
     $tls_desc = "yes (--tls-use-os-certs)"
 }
 
+$notif_desc = if ($notif_matchers.Count -eq 0) { "(none)" } else { $notif_matchers -join ", " }
+
 Write-Host
 Write-Host "--- Configuration ---"
-Write-Host "  Host:     $mqtt_host"
-Write-Host "  Port:     $mqtt_port"
-Write-Host "  Topic:    $mqtt_topic"
-Write-Host "  Username: $mqtt_user"
-Write-Host "  Password: ****"
-Write-Host "  TLS:      $tls_desc"
+Write-Host "  Host:          $mqtt_host"
+Write-Host "  Port:          $mqtt_port"
+Write-Host "  Topic:         $mqtt_topic"
+Write-Host "  Username:      $mqtt_user"
+Write-Host "  Password:      ****"
+Write-Host "  TLS:           $tls_desc"
+Write-Host "  Notification:  $notif_desc"
 Write-Host
 
 $confirm = Read-Host "Apply to $SettingsFile? [Y/n]"
@@ -178,15 +197,19 @@ $stopEntry = [PSCustomObject]@{
     )
 }
 
-$notifEntry = [PSCustomObject]@{
-    matcher = ""
-    hooks = @(
-        [PSCustomObject]@{
-            type    = "command"
-            command = $notif_cmd
-            timeout = 5
-        }
-    )
+# Build one Notification entry per selected matcher
+$notifEntries = @()
+foreach ($matcher in $notif_matchers) {
+    $notifEntries += [PSCustomObject]@{
+        matcher = $matcher
+        hooks = @(
+            [PSCustomObject]@{
+                type    = "command"
+                command = $notif_cmd
+                timeout = 5
+            }
+        )
+    }
 }
 
 # Remove existing claude-knock entries, then append new ones
@@ -204,9 +227,9 @@ if ($settings.hooks.PSObject.Properties["Stop"]) {
 }
 
 if ($settings.hooks.PSObject.Properties["Notification"]) {
-    $settings.hooks.Notification = @($settings.hooks.Notification) + $notifEntry
+    $settings.hooks.Notification = @($settings.hooks.Notification) + $notifEntries
 } else {
-    $settings.hooks | Add-Member -NotePropertyName Notification -NotePropertyValue @($notifEntry)
+    $settings.hooks | Add-Member -NotePropertyName Notification -NotePropertyValue @($notifEntries)
 }
 
 # Write back (atomic: write to temp then rename)
@@ -218,6 +241,10 @@ Write-Host
 Write-Host "Done! Hooks added to $SettingsFile" -ForegroundColor Green
 Write-Host
 Write-Host "  Stop         -> knock:2 (2 pulses)"
-Write-Host "  Notification -> knock:3 (3 pulses)"
+if ($notif_matchers.Count -eq 0) {
+    Write-Host "  Notification -> (disabled)"
+} else {
+    Write-Host "  Notification -> knock:3 (3 pulses) on: $($notif_matchers -join ', ')"
+}
 Write-Host
 Write-Host "To uninstall, run: uninstall.ps1"

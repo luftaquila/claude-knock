@@ -60,6 +60,11 @@ void app_main(void)
     } else {
         /* Normal mode: connect WiFi + MQTT */
         ESP_LOGI(TAG, "Config found, connecting to WiFi...");
+        solenoid_set_strength(cfg.strength);
+        solenoid_set_strength2(cfg.strength2);
+        solenoid_set_delay(cfg.delay_ms);
+        solenoid_set_boost(cfg.boost_ms);
+        solenoid_set_hold(cfg.hold_duty);
         solenoid_set_status(STATUS_CONNECTING);
 
         err = wifi_start_sta(&cfg);

@@ -1,8 +1,10 @@
 #include "portal.h"
 #include "config.h"
+#include "solenoid.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 #include "esp_log.h"
@@ -62,33 +64,41 @@ static esp_err_t json_escape(const char *src, char *dst, size_t dst_len)
 static esp_err_t status_get_handler(httpd_req_t *req)
 {
     device_config_t cfg;
-    esp_err_t err = config_load(&cfg);
-    if (err != ESP_OK) {
-        memset(&cfg, 0, sizeof(cfg));
-        config_generate_username(cfg.mqtt_username, sizeof(cfg.mqtt_username));
-    }
+    /* config_load always initializes cfg (tuning from NVS or defaults, username from MAC).
+     * Returns NOT_FOUND only to signal incomplete credentials; we still render the struct. */
+    config_load(&cfg);
 
     char ssid_esc[sizeof(cfg.wifi_ssid) * 2];
+    char wifi_pass_esc[sizeof(cfg.wifi_password) * 2];
     char server_esc[sizeof(cfg.mqtt_server) * 2];
     char channel_esc[sizeof(cfg.mqtt_channel) * 2];
-    ssid_esc[0] = server_esc[0] = channel_esc[0] = '\0';
+    char mqtt_pass_esc[sizeof(cfg.mqtt_password) * 2];
+    ssid_esc[0] = wifi_pass_esc[0] = server_esc[0] = channel_esc[0] = mqtt_pass_esc[0] = '\0';
 
     if (cfg.configured) {
         if (json_escape(cfg.wifi_ssid, ssid_esc, sizeof(ssid_esc)) != ESP_OK ||
+            json_escape(cfg.wifi_password, wifi_pass_esc, sizeof(wifi_pass_esc)) != ESP_OK ||
             json_escape(cfg.mqtt_server, server_esc, sizeof(server_esc)) != ESP_OK ||
-            json_escape(cfg.mqtt_channel, channel_esc, sizeof(channel_esc)) != ESP_OK) {
+            json_escape(cfg.mqtt_channel, channel_esc, sizeof(channel_esc)) != ESP_OK ||
+            json_escape(cfg.mqtt_password, mqtt_pass_esc, sizeof(mqtt_pass_esc)) != ESP_OK) {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON escape overflow");
             return ESP_FAIL;
         }
     }
 
-    char json[1024];
+    char json[1536];
     snprintf(json, sizeof(json),
              "{\"username\":\"%s\",\"configured\":%s,"
-             "\"wifi_ssid\":\"%s\",\"mqtt_server\":\"%s\",\"mqtt_channel\":\"%s\"}",
+             "\"wifi_ssid\":\"%s\",\"wifi_pass\":\"%s\","
+             "\"mqtt_server\":\"%s\",\"mqtt_channel\":\"%s\",\"mqtt_pass\":\"%s\","
+             "\"strength\":%u,\"strength2\":%u,\"delay_ms\":%u,"
+             "\"boost_ms\":%u,\"hold_duty\":%u}",
              cfg.mqtt_username,
              cfg.configured ? "true" : "false",
-             ssid_esc, server_esc, channel_esc);
+             ssid_esc, wifi_pass_esc,
+             server_esc, channel_esc, mqtt_pass_esc,
+             cfg.strength, cfg.strength2, cfg.delay_ms,
+             cfg.boost_ms, cfg.hold_duty);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
@@ -158,25 +168,31 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     }
     body[received] = '\0';
 
-    device_config_t existing;
-    bool has_existing = (config_load(&existing) == ESP_OK && existing.configured);
-
     device_config_t cfg = {0};
+    cfg.strength = STRENGTH_DEFAULT;
+    cfg.strength2 = STRENGTH_DEFAULT;
+    cfg.delay_ms = DELAY_MS_DEFAULT;
+    cfg.boost_ms = BOOST_MS_DEFAULT;
+    cfg.hold_duty = HOLD_DUTY_DEFAULT;
     config_generate_username(cfg.mqtt_username, sizeof(cfg.mqtt_username));
+
+    /* Preserve tuning fields across reboots — config_load always populates
+     * tuning from NVS (falling back to defaults) regardless of configured state. */
+    device_config_t existing;
+    config_load(&existing);
+    cfg.strength = existing.strength;
+    cfg.strength2 = existing.strength2;
+    cfg.delay_ms = existing.delay_ms;
+    cfg.boost_ms = existing.boost_ms;
+    cfg.hold_duty = existing.hold_duty;
 
     if (get_form_value(body, "wifi_ssid", cfg.wifi_ssid, sizeof(cfg.wifi_ssid)) != ESP_OK ||
         strlen(cfg.wifi_ssid) == 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "WiFi SSID is required");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Wi-Fi SSID is required");
         return ESP_FAIL;
     }
 
-    /* wifi_pass: form value takes precedence; empty means "keep existing" */
-    if (get_form_value(body, "wifi_pass", cfg.wifi_password, sizeof(cfg.wifi_password)) != ESP_OK ||
-        strlen(cfg.wifi_password) == 0) {
-        if (has_existing) {
-            strncpy(cfg.wifi_password, existing.wifi_password, sizeof(cfg.wifi_password) - 1);
-        }
-    }
+    get_form_value(body, "wifi_pass", cfg.wifi_password, sizeof(cfg.wifi_password));
 
     if (get_form_value(body, "mqtt_server", cfg.mqtt_server, sizeof(cfg.mqtt_server)) != ESP_OK ||
         strlen(cfg.mqtt_server) == 0) {
@@ -189,15 +205,10 @@ static esp_err_t save_post_handler(httpd_req_t *req)
         strncpy(cfg.mqtt_channel, "claude-knock", sizeof(cfg.mqtt_channel) - 1);
     }
 
-    /* mqtt_pass: form value takes precedence; empty means "keep existing" */
     if (get_form_value(body, "mqtt_pass", cfg.mqtt_password, sizeof(cfg.mqtt_password)) != ESP_OK ||
         strlen(cfg.mqtt_password) == 0) {
-        if (has_existing && strlen(existing.mqtt_password) > 0) {
-            strncpy(cfg.mqtt_password, existing.mqtt_password, sizeof(cfg.mqtt_password) - 1);
-        } else {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT password is required");
-            return ESP_FAIL;
-        }
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT password is required");
+        return ESP_FAIL;
     }
 
     esp_err_t err = config_save(&cfg);
@@ -212,6 +223,174 @@ static esp_err_t save_post_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Config saved, rebooting in 2s...");
     xTaskCreate(reboot_task, "reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t test_post_handler(httpd_req_t *req)
+{
+    char body[32] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received > 0) body[received] = '\0';
+
+    int count = 1;
+    char val[8];
+    if (received > 0 && get_form_value(body, "count", val, sizeof(val)) == ESP_OK) {
+        long v = strtol(val, NULL, 10);
+        if (v < 1) v = 1;
+        if (v > 10) v = 10;
+        count = (int)v;
+    }
+
+    solenoid_pulse(count);
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"count\":%d}", count);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t strength2_post_handler(httpd_req_t *req)
+{
+    char body[32];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    char val[8];
+    if (get_form_value(body, "strength2", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "strength2 field required");
+        return ESP_FAIL;
+    }
+    long v = strtol(val, NULL, 10);
+    if (v < STRENGTH_MIN) v = STRENGTH_MIN;
+    if (v > STRENGTH_MAX) v = STRENGTH_MAX;
+
+    solenoid_set_strength2((uint8_t)v);
+    config_save_strength2((uint8_t)v);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"strength2\":%ld}", v);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t delay_post_handler(httpd_req_t *req)
+{
+    char body[32];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    char val[8];
+    if (get_form_value(body, "delay_ms", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "delay_ms field required");
+        return ESP_FAIL;
+    }
+    long v = strtol(val, NULL, 10);
+    if (v < DELAY_MS_MIN) v = DELAY_MS_MIN;
+    if (v > DELAY_MS_MAX) v = DELAY_MS_MAX;
+
+    solenoid_set_delay((uint16_t)v);
+    config_save_delay((uint16_t)v);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"delay_ms\":%ld}", v);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t strength_post_handler(httpd_req_t *req)
+{
+    char body[32];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    char val[8];
+    if (get_form_value(body, "strength", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "strength field required");
+        return ESP_FAIL;
+    }
+    long v = strtol(val, NULL, 10);
+    if (v < STRENGTH_MIN) v = STRENGTH_MIN;
+    if (v > STRENGTH_MAX) v = STRENGTH_MAX;
+
+    solenoid_set_strength((uint8_t)v);
+    config_save_strength((uint8_t)v);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"strength\":%ld}", v);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t boost_post_handler(httpd_req_t *req)
+{
+    char body[32];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    char val[8];
+    if (get_form_value(body, "boost_ms", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "boost_ms field required");
+        return ESP_FAIL;
+    }
+    long v = strtol(val, NULL, 10);
+    if (v < BOOST_MS_MIN) v = BOOST_MS_MIN;
+    if (v > BOOST_MS_MAX) v = BOOST_MS_MAX;
+
+    solenoid_set_boost((uint8_t)v);
+    config_save_boost((uint8_t)v);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"boost_ms\":%ld}", v);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t hold_post_handler(httpd_req_t *req)
+{
+    char body[32];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    char val[8];
+    if (get_form_value(body, "hold_duty", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "hold_duty field required");
+        return ESP_FAIL;
+    }
+    long v = strtol(val, NULL, 10);
+    if (v < HOLD_DUTY_MIN) v = HOLD_DUTY_MIN;
+    if (v > HOLD_DUTY_MAX) v = HOLD_DUTY_MAX;
+
+    solenoid_set_hold((uint8_t)v);
+    config_save_hold((uint8_t)v);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"hold_duty\":%ld}", v);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -241,10 +420,47 @@ static const httpd_uri_t uri_save = {
     .handler = save_post_handler,
 };
 
+static const httpd_uri_t uri_strength = {
+    .uri = "/strength",
+    .method = HTTP_POST,
+    .handler = strength_post_handler,
+};
+
+static const httpd_uri_t uri_test = {
+    .uri = "/test",
+    .method = HTTP_POST,
+    .handler = test_post_handler,
+};
+
+static const httpd_uri_t uri_delay = {
+    .uri = "/delay",
+    .method = HTTP_POST,
+    .handler = delay_post_handler,
+};
+
+static const httpd_uri_t uri_strength2 = {
+    .uri = "/strength2",
+    .method = HTTP_POST,
+    .handler = strength2_post_handler,
+};
+
+static const httpd_uri_t uri_boost = {
+    .uri = "/boost",
+    .method = HTTP_POST,
+    .handler = boost_post_handler,
+};
+
+static const httpd_uri_t uri_hold = {
+    .uri = "/hold",
+    .method = HTTP_POST,
+    .handler = hold_post_handler,
+};
+
 esp_err_t portal_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 13;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_server, &config);
@@ -256,6 +472,12 @@ esp_err_t portal_start(void)
     httpd_register_uri_handler(s_server, &uri_root);
     httpd_register_uri_handler(s_server, &uri_status);
     httpd_register_uri_handler(s_server, &uri_save);
+    httpd_register_uri_handler(s_server, &uri_strength);
+    httpd_register_uri_handler(s_server, &uri_test);
+    httpd_register_uri_handler(s_server, &uri_delay);
+    httpd_register_uri_handler(s_server, &uri_strength2);
+    httpd_register_uri_handler(s_server, &uri_boost);
+    httpd_register_uri_handler(s_server, &uri_hold);
     httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, http_404_handler);
 
     ESP_LOGI(TAG, "Captive portal started");

@@ -102,7 +102,8 @@ esp_err_t wifi_start_sta(const device_config_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    ESP_ERROR_CHECK(esp_netif_set_hostname(sta_netif, cfg->mqtt_username));
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));

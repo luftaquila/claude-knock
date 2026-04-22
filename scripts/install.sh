@@ -96,7 +96,7 @@ fi
 if [ "$mqtt_port" = "1883" ]; then
   tls_desc="no (plain MQTT)"
 else
-  tls_desc="yes (--capath /etc/ssl/certs)"
+  tls_desc="yes (--tls-use-os-certs)"
 fi
 
 echo
@@ -124,7 +124,7 @@ shell_escape() {
 if [ "$mqtt_port" = "1883" ]; then
   tls_args=""
 else
-  tls_args=" --capath /etc/ssl/certs"
+  tls_args=" --tls-use-os-certs"
 fi
 
 stop_cmd="mosquitto_pub -h '$(shell_escape "$mqtt_host")' -p '$(shell_escape "$mqtt_port")'${tls_args} -t '$(shell_escape "$mqtt_topic")' -u '$(shell_escape "$mqtt_user")' -P '$(shell_escape "$mqtt_pass")' -m knock:2"

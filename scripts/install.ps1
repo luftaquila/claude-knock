@@ -103,8 +103,23 @@ if ([string]::IsNullOrWhiteSpace($mqtt_host)) {
     exit 1
 }
 
-$mqtt_port = Read-Host "MQTT port [443]"
-if ([string]::IsNullOrWhiteSpace($mqtt_port)) { $mqtt_port = "443" }
+# Normalize host: accept full URIs pasted from device config (e.g. mqtts://host:443)
+# by stripping any mqtt:// or mqtts:// scheme and extracting :port if embedded.
+$mqtt_host = $mqtt_host -replace '^mqtts?://',''
+$embedded_port = ""
+if ($mqtt_host -notmatch '\[' -and $mqtt_host -match ':') {
+    $parts = $mqtt_host -split ':',2
+    $mqtt_host = $parts[0]
+    $embedded_port = $parts[1]
+}
+
+if ($embedded_port) {
+    $mqtt_port = Read-Host "MQTT port [$embedded_port]"
+    if ([string]::IsNullOrWhiteSpace($mqtt_port)) { $mqtt_port = $embedded_port }
+} else {
+    $mqtt_port = Read-Host "MQTT port [443]"
+    if ([string]::IsNullOrWhiteSpace($mqtt_port)) { $mqtt_port = "443" }
+}
 
 $mqtt_topic = Read-Host "MQTT topic [claude-knock]"
 if ([string]::IsNullOrWhiteSpace($mqtt_topic)) { $mqtt_topic = "claude-knock" }

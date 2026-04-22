@@ -76,8 +76,23 @@ if [ -z "$mqtt_host" ]; then
   exit 1
 fi
 
-read -rp "MQTT port [443]: " mqtt_port
-mqtt_port="${mqtt_port:-443}"
+# Normalize host: accept full URIs pasted from device config (e.g. mqtts://host:443)
+# by stripping any mqtt:// or mqtts:// scheme and extracting :port if embedded.
+mqtt_host="${mqtt_host#mqtts://}"
+mqtt_host="${mqtt_host#mqtt://}"
+embedded_port=""
+if [[ "$mqtt_host" != *"["* && "$mqtt_host" == *":"* ]]; then
+  embedded_port="${mqtt_host##*:}"
+  mqtt_host="${mqtt_host%:*}"
+fi
+
+if [ -n "$embedded_port" ]; then
+  read -rp "MQTT port [$embedded_port]: " mqtt_port
+  mqtt_port="${mqtt_port:-$embedded_port}"
+else
+  read -rp "MQTT port [443]: " mqtt_port
+  mqtt_port="${mqtt_port:-443}"
+fi
 
 read -rp "MQTT topic [claude-knock]: " mqtt_topic
 mqtt_topic="${mqtt_topic:-claude-knock}"

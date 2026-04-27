@@ -459,7 +459,10 @@ static const httpd_uri_t uri_hold = {
 esp_err_t portal_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = 13;
+    /* Leave enough LwIP sockets (LWIP_MAX_SOCKETS=16) for MQTT, DNS and
+     * DHCP renew. 7 is plenty for the captive portal (a phone fetches a
+     * handful of URLs during provisioning) without starving the rest. */
+    config.max_open_sockets = 7;
     config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 

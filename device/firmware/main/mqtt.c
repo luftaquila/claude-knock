@@ -73,11 +73,24 @@ esp_err_t mqtt_start(const device_config_t *cfg)
 {
     strncpy(s_topic, cfg->mqtt_channel, sizeof(s_topic) - 1);
 
+    /* Tight keepalive + TCP-level keep-alive so a silently-dead connection
+     * (NAT timeout, broker crash, Wi-Fi fast-retry loop) is detected and
+     * reconnected within ~1 minute instead of ~2+ minutes. */
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = cfg->mqtt_server,
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
         .credentials.username = cfg->mqtt_username,
         .credentials.authentication.password = cfg->mqtt_password,
+        .session.keepalive = 30,
+        .network.disable_auto_reconnect = false,
+        .network.reconnect_timeout_ms = 5000,
+        .network.timeout_ms = 10000,
+        .network.tcp_keep_alive_cfg = {
+            .keep_alive_enable = true,
+            .keep_alive_idle = 30,
+            .keep_alive_interval = 10,
+            .keep_alive_count = 3,
+        },
     };
 
     s_client = esp_mqtt_client_init(&mqtt_cfg);
